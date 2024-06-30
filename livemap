@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earthquake Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+<style>
+body, html {
+margin: 0;
+padding: 0;
+height: 100%;
+font-family: 'Arial', sans-serif;
+overflow: hidden;
+background-color: #1c1c1c;
+color: #e0e0e0;
+}
+.container {
+display: flex;
+height: 100vh;
+flex-direction: column;
+}
+header {
+background-color: #2a2a2a;
+color: #b3b3b3;
+padding: 10px 20px;
+display: flex;
+justify-content: space-between;
+align-items: center;
+}
+h1 {
+margin: 0;
+font-size: 1.5em;
+}
+#lastUpdate {
+font-size: 0.9em;
+color: #b3b3b3;
+}
+.content {
+display: flex;
+flex: 1;
+overflow: hidden;
+}
+#sidebar {
+width: 300px;
+height: 100%;
+background-color: #333333;
+box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+display: flex;
+flex-direction: column;
+}
+#earthquakeList {
+flex: 1;
+overflow-y: auto;
+padding: 10px;
+}
+#statsPanel {
+padding: 10px;
+background-color: #333333;
+border-top: 1px solid #444444;
+}
+#map {
+flex: 1;
+height: 100%;
+}
+.earthquake-item {
+background-color: #333333;
+margin-bottom: 10px;
+padding: 10px;
+border-radius: 4px;
+box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+cursor: pointer;
+transition: background-color 0.3s;
+}
+.earthquake-item:hover {
+background-color: #444444;
+}
+.pulse {
+border-radius: 50%;
+cursor: pointer;
+opacity: 0.8;
+}
+#earthquakeList::-webkit-scrollbar {
+width: 10px;
+}
+#earthquakeList::-webkit-scrollbar-track {
+background: #2a2a2a;
+}
+#earthquakeList::-webkit-scrollbar-thumb {
+background: #787878;
+border-radius: 5px;
+}
+#earthquakeList::-webkit-scrollbar-thumb:hover {
+background: #787878;
+}
+.leaflet-control-zoom a {
+background-color: #2a2a2a !important;
+color: #b3b3b3 !important;
+border-color: #444444 !important;
+}
+.leaflet-control-zoom a:hover {
+background-color: #333333 !important;
+}
+.leaflet-control-attribution {
+background-color: rgba(42, 42, 42, 0.8) !important;
+color: #b3b3b3 !important;
+}
+.leaflet-control-attribution a {
+color: #b3b3b3 !important;
+}
+#sortControl {
+margin-bottom: 10px;
+padding: 10px;
+background-color: #333333;
+border-bottom: 1px solid #444444;
+}
+#sortControl select {
+background-color: #2a2a2a;
+color: #e0e0e0;
+border: 1px solid #444444;
+padding: 5px;
+width: 100%;
+}
+.magnitude-legend {
+background-color: rgba(42, 42, 42, 0.8);
+padding: 10px;
+border-radius: 5px;
+color: #e0e0e0;
+}
+.magnitude-legend h4 {
+margin-top: 0;
+}
+.magnitude-item {
+display: flex;
+align-items: center;
+margin-bottom: 5px;
+}
+.magnitude-color {
+width: 20px;
+height: 20px;
+margin-right: 10px;
+border-radius: 50%;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>Earthquake Tracker</h1>
+<span id="lastUpdate"></span>
+</header>
+<div class="content">
+<div id="sidebar">
+<div id="sortControl">
+<select id="sortSelect">
+<option value="time">Sort by Time (Latest)</option>
+<option value="magnitude">Sort by Magnitude (Highest)</option>
+</select>
+</div>
+<div id="earthquakeList"></div>
+<div id="statsPanel">
+<h3>Earthquake Statistics</h3>
+<canvas id="magnitudeChart"></canvas>
+</div>
+</div>
+<div id="map"></div>
+</div>
+</div>
+
+<script>
+const map = L.map('map', {
+center: [0, 0],
+zoom: 2,
+zoomControl: false,
+attributionControl: false
+});
+
+L.control.zoom({
+position: 'topright'
+}).addTo(map);
+
+L.control.attribution({
+position: 'bottomright'
+}).addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> | &copy; <a href="https://carto.com/attributions">CARTO</a>').addTo(map);
+
+const earthquakeList = document.getElementById('earthquakeList');
+const lastUpdate = document.getElementById('lastUpdate');
+const sortSelect = document.getElementById('sortSelect');
+let magnitudeChart;
+let earthquakes = [];
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+subdomains: 'abcd',
+maxZoom: 20
+}).addTo(map);
+
+map.getContainer().style.background = '#1c1c1c';
+
+function fetchEarthquakes() {
+const apiUrl = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
+fetch(apiUrl)
+.then(response => response.json())
+.then(data => {
+clearMap();
+earthquakes = data.features;
+sortAndDisplayEarthquakes();
+updateLastUpdateTime();
+updateStatistics(earthquakes);
+})
+.catch(error => console.error('Error fetching earthquake data:', error));
+}
+
+function clearMap() {
+map.eachLayer(layer => {
+if (layer instanceof L.CircleMarker) {
+map.removeLayer(layer);
+}
+});
+earthquakeList.innerHTML = '';
+}
+
+function getMagnitudeColor(magnitude) {
+if (magnitude < 3.0) return '#90EE90'; // Light Green (for completeness)
+if (magnitude < 4.0) return '#90EE90'; // Light Green
+if (magnitude < 5.0) return '#FFFF00'; // Yellow
+if (magnitude < 6.0) return '#FFA500'; // Orange
+if (magnitude < 7.0) return '#FF0000'; // Red
+return '#8B0000'; // Dark Red
+}
+
+function createEarthquake(quake) {
+const coords = quake.geometry.coordinates;
+const magnitude = quake.properties.mag;
+const location = quake.properties.place;
+const time = moment(quake.properties.time).format('YYYY-MM-DD HH:mm:ss');
+
+const size = Math.max(magnitude * 3, 5);
+const color = getMagnitudeColor(magnitude);
+
+// Calculate the pulse size based on magnitude (scaled up)
+const pulseSize = Math.min(magnitude * 3, 30); // Increased scale, limit max size to 30px
+
+// Create a custom CSS class for this specific earthquake
+const customPulseClass = `pulse-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+const randomDelay = Math.random() * 2; // Random delay between 0 and 2 seconds
+const style = document.createElement('style');
+style.textContent = `
+.${customPulseClass} {
+animation: ${customPulseClass} 2s infinite;
+animation-delay: ${randomDelay}s;
+}
+@keyframes
+ ${customPulseClass} {
+0% {
+box-shadow: 0 0 0 0 ${color}66;
+}
+70% {
+box-shadow: 0 0 0 ${pulseSize}px ${color}00;
+}
+100% {
+box-shadow: 0 0 0 0 ${color}00;
+}
+}
+`;
+document.head.appendChild(style);
+
+const pulsingIcon = L.divIcon({
+className: `pulse ${customPulseClass}`,
+iconSize: [size, size],
+html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; opacity: 0.8;"></div>`
+});
+
+const marker = L.marker([coords[1], coords[0]], {icon: pulsingIcon}).addTo(map);
+
+marker.bindPopup(`
+<strong>Magnitude:</strong> ${magnitude.toFixed(1)}<br>
+<strong>Location:</strong> ${location}<br>
+<strong>Time:</strong> ${time}
+`);
+
+const earthquakeInfo = document.createElement('div');
+earthquakeInfo.className = 'earthquake-item';
+earthquakeInfo.innerHTML = `
+<strong style="color: ${color};">${magnitude.toFixed(1)}</strong> - ${location}<br>
+<small style="color: #b3b3b3;">${time}</small>
+`;
+
+earthquakeInfo.addEventListener('click', () => {
+map.setView([coords[1], coords[0]], 8);
+marker.openPopup();
+});
+
+earthquakeList.appendChild(earthquakeInfo);
+}
+
+function updateLastUpdateTime() {
+lastUpdate.textContent = `Last updated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`;
+}
+
+function updateStatistics(earthquakes) {
+const magnitudes = earthquakes.map(eq => eq.properties.mag);
+const labels = ['3.0-3.9', '4.0-4.9', '5.0-5.9', '6.0-6.9', '7.0+'];
+const data = [
+magnitudes.filter(m => m >= 3.0 && m < 4.0).length,
+magnitudes.filter(m => m >= 4.0 && m < 5.0).length,
+magnitudes.filter(m => m >= 5.0 && m < 6.0).length,
+magnitudes.filter(m => m >= 6.0 && m < 7.0).length,
+magnitudes.filter(m => m >= 7.0).length
+];
+
+if (magnitudeChart) {
+magnitudeChart.destroy();
+}
+
+const ctx = document.getElementById('magnitudeChart').getContext('2d');
+magnitudeChart = new Chart(ctx, {
+type: 'bar',
+data: {
+labels: labels,
+datasets: [{
+label: 'Earthquake Count',
+data: data,
+backgroundColor: ['#90EE90', '#FFFF00', '#FFA500', '#FF0000', '#8B0000'],
+borderColor: 'rgba(255, 107, 53, 1)',
+borderWidth: 1
+}]
+},
+options: {
+responsive: true,
+scales: {
+y: {
+beginAtZero: true,
+title: {
+display: true,
+text: 'Number of Earthquakes',
+color: '#e0e0e0'
+},
+ticks: {
+color: '#e0e0e0'
+},
+grid: {
+color: 'rgba(255, 255, 255, 0.1)'
+}
+},
+x: {
+title: {
+display: true,
+text: 'Magnitude Range',
+color: '#e0e0e0'
+},
+ticks: {
+color: '#e0e0e0'
+},
+grid: {
+color: 'rgba(255, 255, 255, 0.1)'
+}
+}
+},
+plugins: {
+legend: {
+labels: {
+color: '#e0e0e0'
+}
+}
+}
+}
+});
+}
+
+function sortAndDisplayEarthquakes() {
+const sortBy = sortSelect.value;
+
+if (sortBy === 'magnitude') {
+earthquakes.sort((a, b) => b.properties.mag - a.properties.mag);
+} else {
+earthquakes.sort((a, b) => b.properties.time - a.properties.time);
+}
+
+clearMap();
+earthquakes.forEach(createEarthquake);
+}
+
+function addMagnitudeLegend() {
+const legend = L.control({position: 'bottomleft'});
+legend.onAdd = function(map) {
+const div = L.DomUtil.create('div', 'magnitude-legend');
+div.innerHTML = `
+<h4>Magnitude Scale</h4>
+<div class="magnitude-item"><span class="magnitude-color" style="background-color: #90EE90;"></span> < 3.9: Small earthquakes, often not felt</div>
+<div class="magnitude-item"><span class="magnitude-color" style="background-color: #FFFF00;"></span> 4.0 - 4.9: Light earthquakes, felt by many</div>
+<div class="magnitude-item"><span class="magnitude-color" style="background-color: #FFA500;"></span> 5.0 - 5.9: Moderate earthquakes, slight damage</div>
+<div class="magnitude-item"><span class="magnitude-color" style="background-color: #FF0000;"></span> 6.0 - 6.9: Strong earthquakes, potential for severe damage</div>
+<div class="magnitude-item"><span class="magnitude-color" style="background-color: #8B0000;"></span> > 7.0: Major earthquakes, serious damage over large areas</div>
+`;
+return div;
+};
+legend.addTo(map);
+}
+
+sortSelect.addEventListener('change', sortAndDisplayEarthquakes);
+
+fetchEarthquakes();
+setInterval(fetchEarthquakes, 300000); // Update every 5 minutes
+addMagnitudeLegend(); // Add the legend to the map
+</script>
+</body>
+</html>
